@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Bank Link</title>
+    <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, -apple-system, system-ui, sans-serif;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #f8f7f4;
+        color: #1a1a1a;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #16161a;
+          color: #f1f1f0;
+        }
+      }
+      main {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 80px 24px;
+        text-align: center;
+      }
+      h1 {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 4px 0;
+        font-size: 15px;
+        opacity: 0.75;
+      }
+      .err {
+        color: #c0392b;
+        margin-top: 16px;
+      }
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="title">Connecting…</h1>
+      <p id="msg"></p>
+      <p class="err" id="err"></p>
+      <p id="manual" style="display:none">
+        <a id="manualLink" href="#">Return</a>
+      </p>
+    </main>
+    <script>
+      (function () {
+        var DEFAULT_RETURN_TO = 'http://yuvraj.os/finance/cashflow';
+        var LINK_TOKEN_KEY = 'plaid_link_token';
+        var RETURN_TO_KEY = 'plaid_return_to';
+
+        var titleEl = document.getElementById('title');
+        var msgEl = document.getElementById('msg');
+        var errEl = document.getElementById('err');
+        var manualEl = document.getElementById('manual');
+        var manualLinkEl = document.getElementById('manualLink');
+
+        var params = new URLSearchParams(window.location.search);
+        var isResume = params.has('oauth_state_id');
+
+        function isAllowedReturn(urlStr) {
+          if (typeof urlStr !== 'string' || !urlStr) return false;
+          try {
+            var url = new URL(urlStr);
+            var allowedHosts = ['yuvraj.os', 'localhost', '127.0.0.1'];
+            var allowedProtocols = ['http:', 'https:'];
+
+            return allowedProtocols.includes(url.protocol) && 
+                   allowedHosts.includes(url.hostname);
+          } catch (e) {
+            return false;
+          }
+        }
+
+        function fail(message) {
+          errEl.textContent = message || 'Something went wrong.';
+          titleEl.textContent = 'Failed';
+          msgEl.textContent = '';
+          var fallback = readReturnTo() || DEFAULT_RETURN_TO;
+          manualLinkEl.href = fallback;
+          manualEl.style.display = 'block';
+        }
+
+        function readReturnTo() {
+          var stored = null;
+          try {
+            stored = sessionStorage.getItem(RETURN_TO_KEY);
+          } catch (e) {}
+          var fromQuery = params.get('return_to');
+          var candidate = stored || fromQuery || DEFAULT_RETURN_TO;
+          if (!isAllowedReturn(candidate)) return DEFAULT_RETURN_TO;
+          return candidate;
+        }
+
+        function returnHome(extra) {
+          var target = readReturnTo();
+          var url;
+          try {
+            url = new URL(target);
+          } catch (e) {
+            url = new URL(DEFAULT_RETURN_TO);
+          }
+
+          try {
+            sessionStorage.removeItem(LINK_TOKEN_KEY);
+            sessionStorage.removeItem(RETURN_TO_KEY);
+          } catch (e) {}
+
+          if (window.opener) {
+            var payload = extra || {};
+            payload.type = 'PLAID_RESULT';
+            window.opener.postMessage(payload, url.origin);
+            window.close();
+          } else {
+            if (extra) {
+              for (var key in extra) {
+                if (Object.prototype.hasOwnProperty.call(extra, key) && extra[key] != null) {
+                  url.searchParams.set(key, String(extra[key]));
+                }
+              }
+            }
+            window.location.replace(url.toString());
+          }
+        }
+
+        if (typeof Plaid === 'undefined' || !Plaid || !Plaid.create) {
+          fail('Script failed to load.');
+          return;
+        }
+
+        var linkToken = null;
+
+        if (isResume) {
+          try {
+            linkToken = sessionStorage.getItem(LINK_TOKEN_KEY);
+          } catch (e) {}
+          if (!linkToken) {
+            fail('Lost token after redirect.');
+            return;
+          }
+        } else {
+          linkToken = params.get('link_token');
+          if (!linkToken) {
+            fail('Missing token.');
+            return;
+          }
+          var rt = params.get('return_to');
+          if (rt && !isAllowedReturn(rt)) {
+            fail('Invalid return target.');
+            return;
+          }
+          try {
+            sessionStorage.setItem(LINK_TOKEN_KEY, linkToken);
+            if (rt) sessionStorage.setItem(RETURN_TO_KEY, rt);
+          } catch (e) {}
+        }
+
+        try {
+          var handler = Plaid.create({
+            token: linkToken,
+            receivedRedirectUri: isResume ? window.location.href : undefined,
+            onSuccess: function (publicToken, metadata) {
+              returnHome({
+                public_token: publicToken,
+                institution: metadata && metadata.institution ? metadata.institution.name : undefined,
+              });
+            },
+            onExit: function (err) {
+              if (err) {
+                returnHome({
+                  plaid_error: err.error_message || err.error_code || 'exit',
+                });
+              } else {
+                returnHome({ plaid_cancelled: '1' });
+              }
+            },
+          });
+          handler.open();
+        } catch (e) {
+          fail(String((e && e.message) || e));
+        }
+      })();
+    </script>
+  </body>
+</html>
